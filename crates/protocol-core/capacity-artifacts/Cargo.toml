@@ -1,0 +1,24 @@
+[package]
+name = "capacity-artifacts"
+publish = false
+version = "1.0.0"
+edition = "2021"
+authors = ["CERTCRYPT"]
+
+[lib]
+path = "src/lib.rs"
+
+# Versions are written out rather than inherited from a workspace: the crate can
+# be built inside any workspace, and `workspace = true` would resolve to whatever
+# version each one pins. What the protocol needs is that every build produce the
+# same bytes, so the versions live with the code that depends on them.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_jcs = "0.2"
+sha3 = "0.10"
+hex = "0.4"
+thiserror = "1"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+base64 = "0.22"
+idna = "1"

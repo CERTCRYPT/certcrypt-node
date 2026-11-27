@@ -1,0 +1,1734 @@
+# Copyright © 2025-2026 CERTCRYPT, Inc., its affiliates or licensors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Derived from crates/node/src/http.rs and the types it serializes. The set of
+# (method, path) pairs below is checked against the router by
+# crates/node/tests/openapi_routes.rs; keep `paths` as a plain block mapping
+# (one path per key, methods as its direct children).
+
+openapi: 3.1.0
+info:
+  title: CERTCRYPT Node HTTP API
+  version: 1.0.0
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  description: |
+    HTTP surface of `certcrypt-node`, the issuer-side component that receives
+    loose, holder-signed commitments, closes them into one `submission-set/1`,
+    and submits that set upstream to the CERTCRYPT issuance service.
+
+    The node is a transport and a builder. It does not sign on the issuer's
+    behalf, it does not re-verify commitments (the issuance service evaluates
+    every member), and it does not keep the certified material: it keeps only
+    its own operational state (an operation journal and a delivery outbox).
+
+    CERTCRYPT does not establish that certified content is true and does not
+    validate it. Fixation through the node enables independent evaluation of a
+    certificate by a verifier; it is not a judgment about the content.
+    Operational states reported here (including `accepted` and the upstream
+    `processing`) describe the request, not the certificate.
+
+    ## Authentication
+
+    Issuer routes require the `X-Certcrypt-Issuer-Auth` header: base64 of a
+    JSON proof that the node verifies offline (system-domain Level-1 binding
+    over the issuer's holder key-set root, a disclosed leaf key with its
+    Merkle inclusion proof, and a fresh possession signature by that leaf over
+    a per-request challenge bound to the request). The leaf signs, as UTF-8:
+
+        certcrypt:issuer-auth:1|<challenge>|<host>|<METHOD> <path?query>|<sha3-256 hex of the body>
+
+    where `<host>` is the `Host` header the node receives (port included only
+    when it is not the scheme's default), `<path?query>` is the request target
+    as sent, and the body digest is over the exact bytes sent (of the empty
+    string when there is none). The node rebuilds this from the request, so a
+    proof is good for that one request only. Each challenge is accepted once
+    and only within a short freshness window, so every request — including a
+    retry — needs a newly minted proof. The authenticated scope (the holder
+    key-set root) is derived from the proof, never from the request body. Any
+    failure answers `401` with an opaque plain-text reason. A reverse proxy in
+    front of the node must forward the client's `Host` and request target
+    unchanged.
+
+    ## Backpressure and restarts
+
+    Every `/v1/*` route shares one concurrency limit; excess requests queue
+    rather than being rejected, and each request has a wall-clock budget
+    (queue wait included). A request that exceeds it is answered `503` with an
+    empty body. While the node is restarting it answers every non-GET `/v1/*`
+    request with `503` and a `Retry-After` header (seconds); reads keep
+    working. `/health` is outside both mechanisms.
+
+    Request bodies are limited to 2 MiB.
+servers:
+  - url: https://node.certcrypt.io
+    description: Hosted CERTCRYPT node (the default base URL of the SDKs).
+tags:
+  - name: health
+  - name: issuance
+  - name: operations
+  - name: emissions
+  - name: outbox
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Liveness and outbox counts
+      description: |
+        Public and unauthenticated. Reports what was observed: `ok` when the
+        node's store answered, `down` when it could not be read, `draining`
+        while the node is restarting. Only aggregate counts are returned (no
+        identifiers, no per-issuer breakdown). Status monitors are expected to
+        decide on the HTTP code alone. Not subject to the `/v1/*` concurrency
+        limit or request timeout.
+      security: []
+      responses:
+        '200':
+          description: Store readable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: ok
+                outbox: { pending: 0, dead: 0, stalled: 0 }
+        '503':
+          description: |
+            `status: down` (store unreadable; `outbox` omitted) or
+            `status: draining` (node restarting; `outbox` omitted).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: down
+
+  /v1/issue:
+    post:
+      tags: [issuance]
+      operationId: issue
+      summary: Submit 1..N loose commitments as one submission set
+      description: |
+        The caller ships one or more loose commitments. The node wraps them
+        into ONE `submission-set/1` (envelope metadata, closure time and the
+        deterministic `submission_set_id`; no key is involved) and submits it
+        upstream. All members must share issuer and authorization.
+
+        **Each `capacity_evidence` must be built and signed client-side by the
+        holder.** It contains pseudonyms, Merkle inclusion proofs and ML-DSA-65
+        signatures whose construction is specified by the public CERTCRYPT
+        specifications and checked by the conformance suite. A plain REST
+        client must build it per those specifications (or use a CERTCRYPT
+        SDK); it cannot be written by hand.
+
+        Before submitting, the node checks that every member's `expires_at`
+        equals `issued_at` plus the commitment TTL of the member's own
+        `rules_version`. This is a coherence check that spares a round trip;
+        the issuance service performs the authoritative evaluation.
+
+        The set is made durable in the node's outbox BEFORE the upstream call.
+        If the upstream call does not complete — a transport failure, or a
+        transient status (`408`, `425`, `429`, `5xx`) — the node answers `202`
+        with one `accepted_for_retry` result per member and keeps delivering
+        the set (same `request_id`) in the background; poll each member's
+        `operation_id` for the outcome, and `GET /v1/outbox/dead` for
+        submissions the node set aside.
+
+        If the issuance service answers `insufficient_capacity`, nothing was
+        consumed and the same set stays valid until its commitments expire.
+        While the earliest member `expires_at` is more than five minutes away,
+        the node keeps the set in its outbox and answers `202` with one
+        `accepted_for_retry` result per member, carrying the figures of the
+        refusal in `capacity`. It then submits the same set again (same
+        `request_id`) after 1, 2 and 5 minutes and every 15 minutes after
+        that, the last attempt five minutes before that expiry. Once the
+        service admits it, each member's outcome is written onto its
+        `operation_id`; if the window closes first, each member records the
+        final `insufficient_capacity` with the latest figures. With less than
+        five minutes left, the node answers `insufficient_capacity` at once.
+
+        If the issuance service REFUSES the submission (any other `4xx`, e.g.
+        `400`, `401`, `403`, `404`, `409`, `413`, `422`), sending the same bytes
+        again cannot change the answer: the node answers `422` with a
+        whole-request `submission_failed` carrying `upstream_status`, and keeps
+        nothing in its outbox. Fix the cause before submitting again.
+
+        Response shapes:
+        - per-member: `results` has one entry per member (any mix of
+          outcomes), `state` is absent;
+        - whole-request: `results` is empty and `state` carries a single
+          outcome (`pre_evaluation_rejected`, `insufficient_capacity` or
+          `submission_failed`).
+
+        Resubmitting with the same `request_id` is idempotent. The node answers
+        it from what it already holds for that `request_id` within the
+        issuer's scope: while the set is still held for delivery, it resends
+        that same set; once the issuance service has answered, it replays the
+        recorded outcome without sending anything. Reusing a `request_id`
+        with different commitments or settlement preferences is a `409`.
+        Each issuer's `request_id`s are its own: another issuer using the same
+        value does not affect them.
+      security:
+        - IssuerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueRequest'
+            examples:
+              one_commitment:
+                summary: One commitment (signatures, keys and proofs shortened here; an SDK builds them)
+                value:
+                  request_id: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+                  commitments:
+                    - capacity_evidence:
+                        profile: zero-data.unlinkable
+                        operation_salt_hex: 9b1f0c7e4a2d68b35e91c07a4f3d2b18
+                        projected_authorization:
+                          system_id: certcrypt
+                          rules_version: rules/2026-01
+                          system_root_fingerprint: 24a0ed1bc18463a060fd04ff255244b4512340696997c9c3fc9f3d3f3079f69a
+                          authorized_role: capacity_commitment_holder
+                          authorization_issuer_kid: 'dev:MVvY8R2AZSWnIC5OYTLxeg'
+                          valid_from: '2026-11-25T09:58:12Z'
+                          valid_until: '2027-11-25T09:58:12Z'
+                          holder_key_set_root: e639197851c8185451e1dfb7e4c6caa28bc4223e02b3225ffe5ff919a12386ed
+                          level1_binding:
+                            system_id: certcrypt
+                            rules_version: rules/2026-01
+                            system_root_fingerprint: 24a0ed1bc18463a060fd04ff255244b4512340696997c9c3fc9f3d3f3079f69a
+                            authorized_role: capacity_commitment_holder
+                            authorization_issuer_kid: 'dev:MVvY8R2AZSWnIC5OYTLxeg'
+                            valid_from: '2026-11-25T09:58:12Z'
+                            valid_until: '2027-11-25T09:58:12Z'
+                            holder_key_set_root: e639197851c8185451e1dfb7e4c6caa28bc4223e02b3225ffe5ff919a12386ed
+                          level1_signature:
+                            alg: certcrypt-composite-p256-mldsa65-v1
+                            mode: AND
+                            signatures:
+                              - alg: ECDSA-P256-SHA3-256
+                                encoding: raw-rs-64
+                                low_s: true
+                                sig_b64: '9ykvrpGrHx5Bq34P…'
+                              - alg: ML-DSA-65
+                                sig_b64: '3dIdUF+zo/mNHklI…'
+                          authorization_pseudonym: bc9b7b58b0dea627d07ece6d11c129aa087b2a365ac5d447a060186dc35584b3
+                          holder_pseudonym: 7a4586e6ca9eb3127c2894c5323d6695da98b4d7174e3a79c793099a2668bd00
+                        projected_commitment:
+                          commitment_version: capacity.commitment/1
+                          system_id: certcrypt
+                          system_root_fingerprint: 24a0ed1bc18463a060fd04ff255244b4512340696997c9c3fc9f3d3f3079f69a
+                          rules_version: rules/2026-01
+                          authorization_pseudonym: bc9b7b58b0dea627d07ece6d11c129aa087b2a365ac5d447a060186dc35584b3
+                          holder_pseudonym: 7a4586e6ca9eb3127c2894c5323d6695da98b4d7174e3a79c793099a2668bd00
+                          pool_pseudonym: 09f7fda2b932887763a316be8c68725caad142b38f624183b12ebab8150604f2
+                          certificate_commitment_digest: 1f801d04caec5fc5f14424f209ec28efcb0c493d2e288825dc415d8caea5ea29
+                          consumed_quantity: '1'
+                          declared_effective_units: '1'
+                          issued_at: '2026-11-25T10:30:00Z'
+                          expires_at: '2026-11-26T10:30:00Z'
+                        operation_key:
+                          leaf_index: 0
+                          public_key_b64: 'j5JVMB2TJyLZCs8R…'
+                          inclusion_proof:
+                            - 39d43d905b2cef1374629435ece6daca3c098c406d097e806809de04d6bdca2e
+                          tree_size: 2
+                        commitment_signature_b64: 'tcAl8K+j8fCO1bcd…'
+                      operative:
+                        holder_id: 'contract:Q7mK2pXr9TbL4vNe:h0'
+                        pool_id: 'contract:Q7mK2pXr9TbL4vNe:p0'
+      responses:
+        '200':
+          description: |
+            The issuance service answered. Either per-member `results`, or a
+            whole-request `state` of `pre_evaluation_rejected` or (with no
+            wait window left) `insufficient_capacity`. An `accepted`
+            member has been accepted into a fixation path; it is not yet
+            independent and nothing about its content has been validated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueResponse'
+              examples:
+                accepted:
+                  summary: The member was accepted; poll its operation_id (the receipt signature is shortened here)
+                  value:
+                    request_id: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+                    submission_set_id: 7c1e9a3f5b8d2c4e6a0f1b3d5e7c9a2b4d6f8e0a1c3e5b7d9f2a4c6e8b0d1f3a
+                    results:
+                      - operation_id: op_01JDQ9B4M3N6Q9S2V5X8Z1C4E7
+                        commitment_index: 0
+                        state:
+                          state: accepted
+                          upstream_operation_id: 01JDQ9B4P8R1T4W7Y0B3D6F9H2
+                    operator_receipt:
+                        receipt_version: operator.receipt/1
+                        operator_id: 'op:R4kq8Vn2XbT7mW1pLc9sDe'
+                        submission_set_id: 7c1e9a3f5b8d2c4e6a0f1b3d5e7c9a2b4d6f8e0a1c3e5b7d9f2a4c6e8b0d1f3a
+                        system_id: certcrypt
+                        rules_version: rules/2026-01
+                        issued_at: '2026-11-25T10:30:05Z'
+                        signature:
+                          signature_alg: ml-dsa-65-fips204-v1
+                          signature_b64: 'Hc9vQm2T…'
+                insufficient_capacity:
+                  summary: Not enough capacity and no time left to wait; nothing was consumed
+                  value:
+                    request_id: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+                    results: []
+                    state:
+                      state: insufficient_capacity
+                      capacity:
+                        required: '1'
+                        available: '0'
+                        missing: '1'
+        '202':
+          description: |
+            The set is durably held in the outbox and will be submitted
+            again: either the upstream call did not complete (transport
+            failure, or a transient status from the issuance service: `408`,
+            `425`, `429` or `5xx`), or the service answered
+            `insufficient_capacity` while the set's commitments are still
+            valid. Every member is returned with state `accepted_for_retry`
+            and its own `operation_id`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueResponse'
+              examples:
+                waiting_for_capacity:
+                  summary: Held in the outbox until capacity arrives (the node resubmits the same set)
+                  value:
+                    request_id: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+                    submission_set_id: 7c1e9a3f5b8d2c4e6a0f1b3d5e7c9a2b4d6f8e0a1c3e5b7d9f2a4c6e8b0d1f3a
+                    results:
+                      - operation_id: op_01JDQ9B4M3N6Q9S2V5X8Z1C4E7
+                        commitment_index: 0
+                        state:
+                          state: accepted_for_retry
+                          error: 'insufficient_capacity: the node submits the set again until 2026-11-26T10:25:00Z, while its commitments are valid'
+                          capacity:
+                            required: '1'
+                            available: '0'
+                            missing: '1'
+        '400':
+          $ref: '#/components/responses/JsonSyntaxError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          description: |
+            Not retryable: resending the same request gets the same answer.
+            One of:
+            - the body is valid JSON but does not match the expected schema
+              (plain text);
+            - the node refused the request before submitting it (`NodeError`
+              with `request_id`; nothing was sent, journaled or queued), with
+              `error` one of `no_commitments`, `too_many_commitments` (more
+              than the node's per-request cap), `unknown_commitment_ttl` (a
+              `rules_version` with no known commitment TTL),
+              `commitment_ttl_mismatch` (`expires_at` is not `issued_at` plus
+              the TTL), `invalid_timestamp` (timestamps that are not RFC 3339)
+              `submission_set_invalid` (members that cannot be assembled
+              into one set, e.g. mixed authorizations) or
+              `evidence_not_of_issuer` (a member whose capacity evidence is
+              bound to another `holder_key_set_root` than the one the request
+              authenticated with: a node carries only the issuer's own
+              evidence);
+            - the issuance service refused the submission with a definitive
+              status (`IssueResponse` with a whole-request `submission_failed`
+              carrying `upstream_status`); nothing is kept for retry.
+          content:
+            text/plain:
+              schema:
+                type: string
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/NodeError'
+                  - $ref: '#/components/schemas/IssueResponse'
+              examples:
+                rejected_by_node:
+                  value:
+                    error: no_commitments
+                    message: issue requires at least one commitment
+                    request_id: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+                refused_upstream:
+                  value:
+                    request_id: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+                    results: []
+                    state:
+                      state: submission_failed
+                      error: 'the issuance service returned HTTP 409: {"error":"idempotency_conflict"}'
+                      upstream_status: 409
+        '409':
+          description: |
+            `idempotency_conflict`: this issuer already used the `request_id`
+            with different commitments or settlement preferences. Nothing was
+            sent. Use a new `request_id` for a new request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+        '500':
+          description: |
+            The node could not sign its operator possession proof
+            (`NodeError` with `internal_error`). Nothing was sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+        '502':
+          description: |
+            The issuance service answered with a status the node does not
+            recognize: whole-request `submission_failed` without
+            `upstream_status`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueResponse'
+        '503':
+          description: |
+            Retryable with the same `request_id`. One of:
+            - the outbox could not take the set: `IssueResponse` with
+              `state: submission_failed` and `Retry-After: 5`; nothing was
+              sent upstream, resend the same set with the same `request_id`;
+            - the issuance service answered but the node could not record the
+              outcome: `IssueResponse` with `state: submission_failed` and
+              `Retry-After: 5`; the resend is deduplicated upstream;
+            - the node has no operator identity and/or recognition credential
+              (`NodeError` with `operator_not_configured`); operator
+              recognition is mandatory, so it cannot submit;
+            - the node is restarting: `NodeError` (`node_restarting`) with
+              `Retry-After`;
+            - the request exceeded the node's time budget: empty body.
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/IssueResponse'
+                  - $ref: '#/components/schemas/NodeError'
+
+  /v1/activate:
+    post:
+      tags: [issuance]
+      operationId: activate
+      summary: Activate an issuer (relayed upstream)
+      description: |
+        Pure pass-through of issuer activation to the issuance service. The
+        body is forwarded verbatim and the upstream response is relayed; the
+        node neither parses nor stores the resulting Level-1 binding.
+
+        No issuer proof is required, because activation is how the issuer
+        obtains the binding every other request authenticates with. The
+        authorization is the one-time activation code carried in the body
+        (together with the issuer's `holder_key_set_root`), which the issuance
+        service validates. The exact request and response bodies are defined
+        by the issuance service, not by the node.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivationPassthrough'
+            examples:
+              activate:
+                summary: Redeem the one-time code shown in the console (key material shortened here; an SDK builds it)
+                value:
+                  code: CCI-7K3QX-9MP2R
+                  holder_key_set_root: e639197851c8185451e1dfb7e4c6caa28bc4223e02b3225ffe5ff919a12386ed
+                  key_set_disclosure:
+                    leaf_index: 0
+                    public_key_b64: 'j5JVMB2TJyLZCs8R…'
+                    inclusion_proof:
+                      - 39d43d905b2cef1374629435ece6daca3c098c406d097e806809de04d6bdca2e
+                    tree_size: 2
+                  key_set_possession_b64: '1Dwau84O/aJIgmRF…'
+                  rules_version: rules/2026-01
+                  system_root_fingerprint: 24a0ed1bc18463a060fd04ff255244b4512340696997c9c3fc9f3d3f3079f69a
+                  valid_until: '2027-11-25T09:58:12Z'
+      responses:
+        '200':
+          description: Upstream success body, relayed verbatim.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivationPassthrough'
+              examples:
+                redeemed:
+                  summary: The code was redeemed; the binding comes back inline (signatures shortened)
+                  value:
+                    status: redeemed
+                    authorization_id: 9fd6dfa56a6e21c659c6e938a3b9567f4130848bfe7e1d7704b0b4671aa7cc6c
+                    holder_key_set_root: e639197851c8185451e1dfb7e4c6caa28bc4223e02b3225ffe5ff919a12386ed
+                    holder_id: 'contract:Q7mK2pXr9TbL4vNe:h0'
+                    pool_id: 'contract:Q7mK2pXr9TbL4vNe:p0'
+                    level1_binding:
+                      system_id: certcrypt
+                      rules_version: rules/2026-01
+                      system_root_fingerprint: 24a0ed1bc18463a060fd04ff255244b4512340696997c9c3fc9f3d3f3079f69a
+                      authorized_role: capacity_commitment_holder
+                      authorization_issuer_kid: 'dev:MVvY8R2AZSWnIC5OYTLxeg'
+                      valid_from: '2026-11-25T09:58:12Z'
+                      valid_until: '2027-11-25T09:58:12Z'
+                      holder_key_set_root: e639197851c8185451e1dfb7e4c6caa28bc4223e02b3225ffe5ff919a12386ed
+                    level1_signature:
+                      alg: certcrypt-composite-p256-mldsa65-v1
+                      mode: AND
+                      signatures:
+                        - alg: ECDSA-P256-SHA3-256
+                          encoding: raw-rs-64
+                          low_s: true
+                          sig_b64: '9ykvrpGrHx5Bq34P…'
+                        - alg: ML-DSA-65
+                          sig_b64: '3dIdUF+zo/mNHklI…'
+        '400':
+          $ref: '#/components/responses/JsonSyntaxError'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '4XX':
+          $ref: '#/components/responses/RelayedUpstreamStatus'
+        '502':
+          description: |
+            The issuance service could not be reached (`upstream_error`), or
+            it answered 502 itself (relayed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+        '503':
+          description: |
+            The node is restarting (`node_restarting`, with `Retry-After`),
+            the request exceeded the node's time budget (empty body), or the
+            issuance service answered 503 (relayed, with its `Retry-After`
+            when it sent one).
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema: {}
+        '5XX':
+          $ref: '#/components/responses/RelayedUpstreamStatus'
+
+  /v1/operations/{operation_id}:
+    get:
+      tags: [operations]
+      operationId: getOperation
+      summary: Read one node-local operation
+      description: |
+        Reads a member's node-local record, scoped to the authenticated
+        issuer. An id belonging to another issuer answers `404` exactly like a
+        missing one.
+
+        If the local record is `accepted`, the node asks the issuance service
+        for the current state of that member (by its `upstream_operation_id`)
+        and, when the service answers, returns the service's body verbatim
+        instead of the local record. That body carries an upstream `status`
+        (`processing` is an operational request state only; terminal values
+        are `independent_ready`, `rejected`, `insufficient_capacity` and
+        `expired` — an accepted member that can no longer reach Independent,
+        with nothing consumed and a `reason_code`; re-submit under a fresh
+        authorization) and,
+        once `independent_ready`, the `independence_proof` and settlement
+        material. The node relays this body and does not store it. If the
+        service has no view yet or cannot be reached, the local record is
+        returned.
+
+        To let the service release the upstream view, send the issuer's read
+        proof over the upstream operation id in `X-Certcrypt-Issuer-Read`; the
+        node relays it unchanged and adds its own operator proof over the same
+        resource.
+
+        Records are retained for a limited period after they become terminal;
+        after that, use `GET /v1/emissions/by-commitment/{independence_ref}`.
+      security:
+        - IssuerAuth: []
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          description: Node-local operation id (`op_` followed by a ULID), as returned by `POST /v1/issue`.
+          schema:
+            type: string
+          example: op_01JDQ9B4M3N6Q9S2V5X8Z1C4E7
+        - $ref: '#/components/parameters/IssuerRead'
+      responses:
+        '200':
+          description: The local record, or the issuance service's view of an accepted member.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/OperationRecord'
+                  - $ref: '#/components/schemas/UpstreamOperationView'
+              examples:
+                processing:
+                  summary: Accepted and waiting for its settlement window (an operational state, not a certificate state)
+                  value:
+                    operation_id: 01JDQ9B4P8R1T4W7Y0B3D6F9H2
+                    status: processing
+                    settlement_window:
+                      window_profile: close_6h
+                      window_profile_version: v2-2026-09-18
+                      target_close_by: '2026-11-25T16:00:00Z'
+                      expected_settled_by: '2026-11-25T16:20:00Z'
+                    settlement_progress:
+                      phase: queued
+                independent_ready:
+                  summary: The proof is ready; keep it with the certificate (artifacts shortened here)
+                  value:
+                    operation_id: 01JDQ9B4P8R1T4W7Y0B3D6F9H2
+                    status: independent_ready
+                    independence_proof: 'eyJhbnRpX3JlcGxheSI6ey…'
+                    settlement_material: 'eyJzZXR0bGVtZW50X3Byb2ZpbGVfaWQiO…'
+                local_record:
+                  summary: The node's own record, when the service has no view yet
+                  value:
+                    operation_id: op_01JDQ9B4M3N6Q9S2V5X8Z1C4E7
+                    contract_id: e639197851c8185451e1dfb7e4c6caa28bc4223e02b3225ffe5ff919a12386ed
+                    request_id: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+                    submission_set_id: 7c1e9a3f5b8d2c4e6a0f1b3d5e7c9a2b4d6f8e0a1c3e5b7d9f2a4c6e8b0d1f3a
+                    commitment_index: 0
+                    state:
+                      state: accepted
+                      upstream_operation_id: 01JDQ9B4P8R1T4W7Y0B3D6F9H2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No operation with this id in the caller's scope.
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: operation not found
+        '500':
+          description: The journal read failed.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '503':
+          description: |
+            The journal call did not complete (`journal unavailable`, plain
+            text), or the request exceeded the node's time budget (empty body).
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/emissions/by-commitment/{independence_ref}:
+    get:
+      tags: [emissions]
+      operationId: getEmissionByCommitment
+      summary: Read one emission by its capacity-evidence digest
+      description: |
+        Pure relay to the issuance service; the node's journal is not
+        consulted. The digest is computed by the issuer from evidence it
+        signed, so this lookup keeps working after a node restart, after the
+        journal's retention, or through a different node.
+
+        The issuer's read proof (`X-Certcrypt-Issuer-Read`, over the digest) is
+        relayed unchanged and the node adds its own operator proof over the
+        same resource. The response body is defined by the issuance service
+        and relayed verbatim; it is not stored by the node.
+      security:
+        - IssuerAuth: []
+      parameters:
+        - name: independence_ref
+          in: path
+          required: true
+          description: |
+            Lowercase hex SHA3-256 digest of the JCS-canonical
+            `capacity_evidence`, as specified by the public CERTCRYPT
+            specifications.
+          example: 3f9c1e0b7a2d4c6e8f1a3b5c7d9e0f2a4b6c8d0e1f3a5b7c9d1e3f5a7b9c0d2e
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{64}$'
+        - $ref: '#/components/parameters/IssuerRead'
+      responses:
+        '200':
+          description: The issuance service's view of the emission, relayed verbatim.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpstreamPassthrough'
+              examples:
+                independent_ready:
+                  summary: The emission is resolvable (artifacts shortened here)
+                  value:
+                    operation_id: 01JDQ9B4P8R1T4W7Y0B3D6F9H2
+                    status: independent_ready
+                    independence_proof: 'eyJhbnRpX3JlcGxheSI6ey…'
+                    settlement_material: 'eyJzZXR0bGVtZW50X3Byb2ZpbGVfaWQiO…'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The issuance service has no emission for this digest (`not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+              example:
+                error: not_found
+                message: no emission for this capacity-evidence digest
+        '502':
+          description: |
+            The issuance service did not answer, or answered with any
+            non-success status other than 404 (`upstream_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+              example:
+                error: upstream_unavailable
+                message: the issuance service did not answer
+        '503':
+          $ref: '#/components/responses/Timeout'
+
+  /v1/emissions/unresolved:
+    get:
+      tags: [emissions]
+      operationId: listUnresolvedEmissions
+      summary: List the issuer's emissions still in flight
+      description: |
+        Pure relay of the issuance service's issuer-facing enumeration, for a
+        reconciler that lost its operation handles. The node forwards `since`
+        byte for byte (the issuer's read proof covers the exact resource
+        `emissions:unresolved:<since>`), relays the issuer's proof unchanged
+        and adds its own operator proof over the same resource. Which
+        integration the request resolves to is decided upstream from the
+        proven key-set root. The response body is defined by the issuance
+        service and relayed verbatim; nothing is stored.
+
+        There is no local fallback: an upstream failure is reported rather
+        than replaced by an empty list.
+      security:
+        - IssuerAuth: []
+      parameters:
+        - name: since
+          in: query
+          required: true
+          description: RFC 3339 timestamp, relayed verbatim (never normalized).
+          example: '2026-11-24T00:00:00Z'
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of entries; forwarded upstream when present.
+          example: 100
+          schema:
+            type: integer
+            format: uint32
+            minimum: 0
+            maximum: 4294967295
+        - $ref: '#/components/parameters/IssuerRead'
+      responses:
+        '200':
+          description: The issuance service's enumeration, relayed verbatim.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpstreamPassthrough'
+              examples:
+                in_flight:
+                  summary: One emission still waiting for its settlement window
+                  value:
+                    emissions:
+                      - operation_id: 01JDQ9B4P8R1T4W7Y0B3D6F9H2
+                        status: processing
+                        updated_at: '2026-11-25T10:30:05Z'
+                        target_close_by: '2026-11-25T16:00:00Z'
+                        expected_settled_by: '2026-11-25T16:20:00Z'
+                        commitment_count: 1
+                    truncated: false
+        '400':
+          description: '`since` missing, or `limit` not an unsigned 32-bit integer.'
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '4XX':
+          description: |
+            The issuance service refused the read; its status code is relayed
+            (for example `404` when the proven key-set root resolves to no
+            active integration). The upstream body and `Retry-After` are not
+            relayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+              example:
+                error: upstream refused the read
+        '502':
+          description: |
+            The issuance service was unreachable (`upstream unreachable`), or
+            it answered 502 itself (`upstream refused the read`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+        '503':
+          description: |
+            The request exceeded the node's time budget (empty body), or the
+            issuance service answered 503 (`upstream refused the read`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+        '5XX':
+          description: 'Other upstream 5xx status, relayed with `error: upstream refused the read`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+
+  /v1/outbox/dead:
+    get:
+      tags: [outbox]
+      operationId: listDeadLetters
+      summary: List the issuer's dead-lettered submissions
+      description: |
+        Submissions the node set aside during background delivery — refused
+        by the issuance service (a definitive `4xx`, dead-lettered at once) or
+        out of delivery attempts — scoped to the authenticated issuer. Only delivery metadata is returned, never the
+        stored submission set. An empty list (not `404`) means nothing is
+        stuck.
+      security:
+        - IssuerAuth: []
+      responses:
+        '200':
+          description: Dead-lettered entries for the caller's scope (possibly empty).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeadLetterList'
+              examples:
+                one_stuck:
+                  summary: One submission set aside after a definitive refusal
+                  value:
+                    dead:
+                      - request_id: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+                        attempts: 1
+                        created_at_ms: 1795602600000
+                        last_error: 'the issuance service returned HTTP 409: {"error":"idempotency_conflict"}'
+                nothing_stuck:
+                  summary: Nothing is stuck
+                  value:
+                    dead: []
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: The outbox read failed.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '503':
+          description: |
+            The outbox call did not complete (`outbox unavailable`, plain
+            text), or the request exceeded the node's time budget (empty body).
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/outbox/dead/{request_id}/redrive:
+    post:
+      tags: [outbox]
+      operationId: redriveDeadLetter
+      summary: Put one dead-lettered submission back in the delivery queue
+      description: |
+        Returns one of the caller's dead-lettered submissions to the delivery
+        queue with a fresh attempt budget, due immediately. The stored set is
+        resent verbatim; nothing is re-signed. Another issuer's entry answers
+        `404` exactly like a missing one. No request body is read.
+      security:
+        - IssuerAuth: []
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          description: The `request_id` of the dead-lettered submission.
+          example: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+          schema:
+            type: string
+      responses:
+        '202':
+          description: The entry is pending delivery again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RedriveAccepted'
+              example:
+                request_id: 01JDQ9B4K7M2P5R8T1V3X6Z9A0
+                state: pending
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No dead-lettered submission with that id in the caller's scope.
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: no dead-lettered submission with that id
+        '500':
+          description: The outbox write failed.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '503':
+          description: |
+            One of: the outbox call did not complete (`outbox unavailable`,
+            plain text); the node is restarting (`NodeError` JSON with
+            `Retry-After`); the request exceeded the node's time budget
+            (empty body).
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            text/plain:
+              schema:
+                type: string
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeError'
+
+components:
+  securitySchemes:
+    IssuerAuth:
+      type: apiKey
+      in: header
+      name: X-Certcrypt-Issuer-Auth
+      description: |
+        Base64 (standard) of the JSON `IssuerAuthProof`. Verified offline by
+        the node; single use, fresh challenge per request, bound to the
+        request (host, method, path and query, body). See
+        `IssuerAuthProof`. An `Authorization` header, if sent, is ignored by
+        the node.
+
+  headers:
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 1
+
+  parameters:
+    IssuerRead:
+      name: X-Certcrypt-Issuer-Read
+      in: header
+      required: false
+      description: |
+        The issuer's half of the read chain, relayed unchanged to the issuance
+        service. The node cannot produce it; the CERTCRYPT SDKs build it (a
+        private issuer↔service contract, not part of the public specifications).
+        It is single-use: it carries a fresh challenge the issuance service
+        accepts once, so a client builds a new one for every request, retries
+        included. Without it, or with one already used, the issuance service
+        refuses the upstream read.
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: |
+        Missing, malformed, unverifiable, stale or replayed issuer proof. The
+        body is one of a few fixed strings and never says which check failed.
+      content:
+        text/plain:
+          schema:
+            type: string
+            enum:
+              - missing issuer auth proof
+              - issuer auth proof not base64
+              - issuer auth proof malformed
+              - issuer auth proof does not verify
+    Timeout:
+      description: The request exceeded the node's time budget (queue wait included). Empty body.
+    JsonSyntaxError:
+      description: The body is not syntactically valid JSON.
+      content:
+        text/plain:
+          schema:
+            type: string
+    JsonDataError:
+      description: The body is valid JSON but does not match the expected schema.
+      content:
+        text/plain:
+          schema:
+            type: string
+    UnsupportedMediaType:
+      description: '`Content-Type: application/json` is missing.'
+      content:
+        text/plain:
+          schema:
+            type: string
+    PayloadTooLarge:
+      description: The body exceeds the 2 MiB limit.
+      content:
+        text/plain:
+          schema:
+            type: string
+    RelayedUpstreamStatus:
+      description: |
+        The issuance service's status code, relayed. The body is the service's
+        own body — JSON when it parses as JSON, otherwise the raw text — and
+        its `Retry-After` (in seconds) is relayed when present.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema: {}
+        text/plain:
+          schema:
+            type: string
+
+  schemas:
+    HealthResponse:
+      description: "Liveness of the node and the state of its outbox, as returned by `GET /health`."
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, down, draining]
+        outbox:
+          $ref: '#/components/schemas/OutboxCounts'
+          description: Omitted when the store could not be read or the node is draining.
+
+    OutboxCounts:
+      description: "How many outbox entries are pending delivery, dead, or stalled."
+      type: object
+      required: [pending, dead, stalled]
+      properties:
+        pending:
+          type: integer
+          format: uint64
+          minimum: 0
+          description: Submissions awaiting delivery.
+        dead:
+          type: integer
+          format: uint64
+          minimum: 0
+          description: Submissions set aside (refused, or out of retries). Non-zero means work is stuck.
+        stalled:
+          type: integer
+          format: uint64
+          minimum: 0
+          description: Pending submissions with at least 12 failed delivery attempts.
+
+    NodeError:
+      description: "Error body the node returns with a failure status: a machine-readable `error` code, a message, and the request it concerns when known."
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Machine-readable code or short reason (e.g. `node_restarting`, `not_found`, `upstream_unavailable`, `upstream_error`, `commitment_ttl_mismatch`, `operator_not_configured`).
+        message:
+          type: string
+        request_id:
+          type: string
+          description: Present on `POST /v1/issue` errors; the request's idempotency key.
+
+    IssueRequest:
+      description: "Body of `POST /v1/issue`: the loose commitments to close into one submission set, an idempotency `request_id`, and optional settlement preferences."
+      type: object
+      required: [commitments]
+      properties:
+        request_id:
+          type: string
+          description: |
+            Idempotency key (26-character ULID). Generated by the node when
+            absent. Reusing it makes the upstream submission idempotent.
+        commitments:
+          type: array
+          minItems: 1
+          description: |
+            Loose commitments to close into one submission set. All must
+            share issuer and authorization. The node enforces a configurable
+            per-request maximum.
+          items:
+            $ref: '#/components/schemas/LooseCommitment'
+        settlement_preferences:
+          $ref: '#/components/schemas/SettlementPreferences'
+
+    LooseCommitment:
+      description: "One commitment as an issuer hands it to the node, before it is closed into a submission set: its capacity evidence and its operative context."
+      type: object
+      required: [capacity_evidence, operative]
+      properties:
+        capacity_evidence:
+          $ref: '#/components/schemas/CapacityEvidence'
+        operative:
+          $ref: '#/components/schemas/OperativeContext'
+
+    SettlementPreferences:
+      type: object
+      required: [window_profile, fallback_policy]
+      description: |
+        Issuer-elected settlement-window preference, forwarded verbatim to the
+        issuance service as an operational preference. It is not part of the
+        submission set or of any proof. When absent the service applies its
+        default. Accepted values are defined by the issuance service.
+      properties:
+        window_profile:
+          type: string
+        fallback_policy:
+          type: string
+
+    OperativeContext:
+      type: object
+      additionalProperties: false
+      required: [holder_id, pool_id]
+      description: |
+        The integration's fixed identifiers, assigned at onboarding and relayed
+        by the SDK. Travels node-to-service only (it is part of the submission
+        set) and never reaches an offline verifier.
+      properties:
+        holder_id:
+          type: string
+        pool_id:
+          type: string
+
+    CapacityEvidence:
+      type: object
+      required:
+        - profile
+        - operation_salt_hex
+        - projected_authorization
+        - projected_commitment
+        - operation_key
+        - commitment_signature_b64
+      description: |
+        The holder-signed, zero-data commitment for one certificate. The
+        fields listed here are what the node reads and relays; pseudonym
+        derivation, signing bytes, Merkle rules and signature algorithms are
+        specified by the public CERTCRYPT specifications and checked by the
+        conformance suite. Must be produced client-side by the holder (or an
+        SDK); the node never signs it.
+      properties:
+        profile:
+          type: string
+          description: Profile marker (e.g. `zero-data.unlinkable`).
+        operation_salt_hex:
+          type: string
+          description: Public per-operation salt, hex.
+        projected_authorization:
+          $ref: '#/components/schemas/ProjectedAuthorization'
+        projected_commitment:
+          $ref: '#/components/schemas/ProjectedCommitment'
+        operation_key:
+          $ref: '#/components/schemas/OperationKeyDisclosure'
+        commitment_signature_b64:
+          type: string
+          description: Signature by the disclosed leaf key over the projected commitment, base64.
+
+    ProjectedCommitment:
+      description: "The commitment fields carried inside capacity evidence."
+      type: object
+      required:
+        - commitment_version
+        - system_id
+        - system_root_fingerprint
+        - rules_version
+        - authorization_pseudonym
+        - holder_pseudonym
+        - pool_pseudonym
+        - certificate_commitment_digest
+        - consumed_quantity
+        - declared_effective_units
+        - issued_at
+        - expires_at
+      properties:
+        commitment_version: { type: string }
+        system_id: { type: string }
+        system_root_fingerprint: { type: string }
+        rules_version:
+          type: string
+          description: Rules version; also selects the commitment TTL the node checks.
+        authorization_pseudonym: { type: string }
+        holder_pseudonym: { type: string }
+        pool_pseudonym: { type: string }
+        certificate_commitment_digest:
+          type: string
+          description: Digest of the certificate content (the content itself never reaches the node).
+        consumed_quantity:
+          type: string
+          description: Consumed capacity, as a decimal string.
+        declared_effective_units:
+          type: string
+          description: Issuer-declared effective units, as a decimal string.
+        issued_at:
+          type: string
+          description: RFC 3339, second precision.
+        expires_at:
+          type: string
+          description: RFC 3339; must equal `issued_at` plus the commitment TTL of `rules_version`.
+
+    ProjectedAuthorization:
+      description: "The authorization fields carried inside capacity evidence."
+      type: object
+      required:
+        - system_id
+        - rules_version
+        - system_root_fingerprint
+        - authorized_role
+        - authorization_issuer_kid
+        - valid_from
+        - valid_until
+        - holder_key_set_root
+        - level1_binding
+        - level1_signature
+        - authorization_pseudonym
+        - holder_pseudonym
+      properties:
+        system_id: { type: string }
+        rules_version: { type: string }
+        system_root_fingerprint: { type: string }
+        authorized_role: { type: string }
+        authorization_issuer_kid: { type: string }
+        valid_from: { type: string }
+        valid_until: { type: string }
+        holder_key_set_root: { type: string }
+        level1_binding:
+          $ref: '#/components/schemas/Level1AuthorizationBinding'
+        level1_signature:
+          $ref: '#/components/schemas/CompositeSignature'
+        authorization_pseudonym: { type: string }
+        holder_pseudonym: { type: string }
+
+    Level1AuthorizationBinding:
+      type: object
+      required:
+        - system_id
+        - rules_version
+        - system_root_fingerprint
+        - authorized_role
+        - authorization_issuer_kid
+        - valid_from
+        - valid_until
+        - holder_key_set_root
+      description: |
+        The binding signed by the CERTCRYPT system domain over the issuer's
+        holder key-set root. Its signing bytes are specified by the public
+        CERTCRYPT specifications.
+      properties:
+        system_id: { type: string }
+        rules_version: { type: string }
+        system_root_fingerprint: { type: string }
+        authorized_role: { type: string }
+        authorization_issuer_kid: { type: string }
+        valid_from:
+          type: string
+          description: RFC 3339.
+        valid_until:
+          type: string
+          description: RFC 3339.
+        holder_key_set_root: { type: string }
+
+    CompositeSignature:
+      type: object
+      required: [alg, mode, signatures]
+      description: Composite (classical + post-quantum) signature, as specified by the public CERTCRYPT specifications.
+      properties:
+        alg:
+          type: string
+          description: Composite profile (e.g. `certcrypt-composite-p256-mldsa65-v1`).
+        mode:
+          type: string
+          description: Combination mode (e.g. `AND`).
+        signatures:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentSignature'
+
+    ComponentSignature:
+      description: "One component of a composite signature: its algorithm and the signature in base64. ECDSA components also state their encoding and low-S form."
+      type: object
+      required: [alg, sig_b64]
+      properties:
+        alg: { type: string }
+        encoding:
+          type: string
+          description: Present for ECDSA components.
+        low_s:
+          type: boolean
+          description: Present for ECDSA components.
+        sig_b64: { type: string }
+
+    OperationKeyDisclosure:
+      type: object
+      required: [leaf_index, public_key_b64, inclusion_proof, tree_size]
+      description: A per-operation leaf public key and its Merkle inclusion proof to the holder key-set root.
+      properties:
+        leaf_index:
+          type: integer
+          minimum: 0
+        public_key_b64:
+          type: string
+        inclusion_proof:
+          type: array
+          items:
+            type: string
+        tree_size:
+          type: integer
+          minimum: 0
+
+    IssuerAuthProof:
+      type: object
+      required: [signed_level1, disclosure, challenge, possession_b64]
+      description: |
+        JSON carried (base64) in `X-Certcrypt-Issuer-Auth`. The node checks,
+        offline and fail-closed: the binding's validity window; that its
+        `system_root_fingerprint` is the one the node trusts; the binding's
+        composite signature; that the disclosed leaf belongs to
+        `holder_key_set_root`; the leaf's possession signature over
+        `challenge` bound to the request (see Authentication); and that
+        `challenge` is fresh and unused.
+      properties:
+        signed_level1:
+          type: object
+          required: [level1_binding, level1_signature]
+          properties:
+            level1_binding:
+              $ref: '#/components/schemas/Level1AuthorizationBinding'
+            level1_signature:
+              $ref: '#/components/schemas/CompositeSignature'
+        disclosure:
+          $ref: '#/components/schemas/OperationKeyDisclosure'
+        challenge:
+          type: string
+          description: |
+            `<unix_millis>.<random>`, minted per request. The timestamp must be
+            within 120 seconds of the node's clock; a challenge is accepted once.
+          pattern: '^-?[0-9]+\..*$'
+        possession_b64:
+          type: string
+          description: |
+            ML-DSA-65 signature by the disclosed leaf, base64, over
+            `certcrypt:issuer-auth:1|<challenge>|<host>|<METHOD> <path?query>|<body sha3-256 hex>`
+            (see Authentication).
+
+    IssueResponse:
+      description: "Result of `POST /v1/issue`: the submission set formed, the result for each member, the request state and, when present, the operator's receipt."
+      type: object
+      required: [request_id, results]
+      properties:
+        request_id:
+          type: string
+          description: The idempotency key used (the caller's, or the one the node generated).
+        submission_set_id:
+          type: string
+          description: |
+            The submission set's identity, when member evaluation was reached
+            or the set was held for retry. Absent for a whole-request outcome.
+        results:
+          type: array
+          description: |
+            One result per member. Empty when the whole request had a single
+            outcome (see `state`).
+          items:
+            $ref: '#/components/schemas/MemberResult'
+        state:
+          $ref: '#/components/schemas/OperationState'
+          description: |
+            Whole-request outcome, present only when no per-member result
+            exists (`pre_evaluation_rejected` or `submission_failed`).
+        operator_receipt:
+          $ref: '#/components/schemas/OperatorReceipt'
+
+    MemberResult:
+      description: "The result for one member of the submission set: its operation, its index among the request's commitments, and its state."
+      type: object
+      required: [operation_id, commitment_index, state]
+      properties:
+        operation_id:
+          type: string
+          description: Node-local operation id for this member (the key for `GET /v1/operations/{operation_id}`).
+        commitment_index:
+          type: integer
+          minimum: 0
+          description: The member's position in the submitted `commitments`.
+        state:
+          $ref: '#/components/schemas/OperationState'
+
+    OperationRecord:
+      type: object
+      required: [operation_id, contract_id, request_id, state]
+      description: A node-local journal record for one member (or one whole-request outcome).
+      properties:
+        operation_id:
+          type: string
+        contract_id:
+          type: string
+          description: The authenticated issuer scope the record belongs to (the holder key-set root).
+        request_id:
+          type: string
+          description: The idempotency key used upstream.
+        submission_set_id:
+          type: string
+          description: Absent for a whole-request outcome.
+        commitment_index:
+          type: integer
+          minimum: 0
+          description: Absent for a whole-request outcome.
+        state:
+          $ref: '#/components/schemas/OperationState'
+        operator_receipt:
+          $ref: '#/components/schemas/OperatorReceipt'
+
+    UpstreamOperationView:
+      type: object
+      required: [status]
+      additionalProperties: true
+      description: |
+        The issuance service's view of an accepted member, relayed verbatim.
+        Its full shape is defined by the issuance service. `status` is an
+        operational request state; `independence_proof` (present once
+        `independent_ready`) is the canonical artifact a verifier evaluates
+        independently, with the public CERTCRYPT verifier toolkits.
+      properties:
+        status:
+          type: string
+          description: e.g. `processing`, `independent_ready`, `rejected`, `insufficient_capacity`, `expired`.
+        independence_proof:
+          type: string
+          contentEncoding: base64
+          description: Base64 of the canonical `independence_proof`, present once `status` is `independent_ready`.
+        settlement_material:
+          type: string
+          contentEncoding: base64
+          description: Base64 of the settlement material, present once `status` is `independent_ready`.
+        settlement_window:
+          $ref: '#/components/schemas/SettlementWindow'
+        settlement_progress:
+          $ref: '#/components/schemas/SettlementProgress'
+
+    SettlementWindow:
+      type: object
+      required: [window_profile, window_profile_version]
+      additionalProperties: true
+      description: |
+        Present while `status` is `processing`. Operational scheduling
+        information from the operator, so a client can wait for the right
+        moment instead of polling blindly. It is never part of the submission
+        set, the proof or anything a verifier evaluates, does not promise when
+        the operation becomes Independent, and carries no cost information.
+      properties:
+        window_profile:
+          type: string
+          description: The settlement window profile assigned to the operation. Profile names are versioned values of the applicable public rules; treat them as opaque and do not depend on a particular value.
+        window_profile_version:
+          type: string
+        target_close_by:
+          type: string
+          format: date-time
+          description: When the operator expects the settlement window holding this operation to close.
+        expected_settled_by:
+          type: string
+          format: date-time
+          description: |
+            The operator's estimate of when the settlement for this window is
+            anchored and final, so a read can return a terminal state. Never
+            earlier than `target_close_by`; present exactly when
+            `target_close_by` is. An estimate, not a promise: a read after this
+            instant may still answer `processing`, which a client may report as
+            running late.
+
+    SettlementProgress:
+      type: object
+      required: [phase]
+      additionalProperties: true
+      description: Present while `status` is `processing`. Where the operation's settlement stands; operational only.
+      properties:
+        phase:
+          type: string
+          enum: [queued, finality_pending, final]
+        progress_ppm:
+          type: integer
+          minimum: 0
+          maximum: 1000000
+          description: Progress towards finality, in parts per million, when the operator reports it.
+        observed_at:
+          type: string
+          format: date-time
+
+    UpstreamPassthrough:
+      type: object
+      additionalProperties: true
+      description: A JSON body defined by the issuance service and relayed verbatim by the node.
+
+    ActivationPassthrough:
+      description: |
+        Any JSON value. Forwarded to, or relayed from, the issuance service
+        unchanged; its shape is defined there.
+
+    OperationState:
+      description: |
+        Node-local state of one member, or of a whole request. Serialized as
+        an object whose `state` property names the variant. These are
+        operational states of the request; none of them is a certificate
+        state, and none says anything about the truth of the certified
+        content.
+      oneOf:
+        - $ref: '#/components/schemas/OperationStateAccepted'
+        - $ref: '#/components/schemas/OperationStateRejected'
+        - $ref: '#/components/schemas/OperationStateReplayDetected'
+        - $ref: '#/components/schemas/OperationStateInsufficientCapacity'
+        - $ref: '#/components/schemas/OperationStatePreEvaluationRejected'
+        - $ref: '#/components/schemas/OperationStateAcceptedForRetry'
+        - $ref: '#/components/schemas/OperationStateSubmissionFailed'
+      discriminator:
+        propertyName: state
+        mapping:
+          accepted: '#/components/schemas/OperationStateAccepted'
+          rejected: '#/components/schemas/OperationStateRejected'
+          replay_detected: '#/components/schemas/OperationStateReplayDetected'
+          insufficient_capacity: '#/components/schemas/OperationStateInsufficientCapacity'
+          pre_evaluation_rejected: '#/components/schemas/OperationStatePreEvaluationRejected'
+          accepted_for_retry: '#/components/schemas/OperationStateAcceptedForRetry'
+          submission_failed: '#/components/schemas/OperationStateSubmissionFailed'
+
+    OperationStateAccepted:
+      type: object
+      required: [state, upstream_operation_id]
+      description: |
+        Accepted upstream into a fixation path; the issuance service finishes
+        it asynchronously. Non-terminal: poll the operation.
+      properties:
+        state:
+          type: string
+          const: accepted
+        upstream_operation_id:
+          type: string
+          description: The member's operation id at the issuance service (what an issuer read proof covers).
+
+    OperationStateRejected:
+      type: object
+      required: [state, reason_code, message]
+      description: Rejected per member by the issuance service. Terminal.
+      properties:
+        state:
+          type: string
+          const: rejected
+        reason_code: { type: string }
+        message: { type: string }
+
+    OperationStateReplayDetected:
+      type: object
+      required: [state, message]
+      description: The member's commitment was already consumed or claimed. Terminal.
+      properties:
+        state:
+          type: string
+          const: replay_detected
+        message: { type: string }
+
+    OperationStateInsufficientCapacity:
+      type: object
+      required: [state]
+      description: |
+        The set was not admitted because the capacity available to its issuer
+        does not cover it. One verdict for the whole set: recorded once for
+        the submit, or on every member's record when the node had already
+        handed out member ids while it waited for capacity. Terminal; the
+        node records it once its wait window has closed (see
+        `POST /v1/issue`). The same set can be submitted again with a new
+        `request_id` while its commitments are valid.
+      properties:
+        state:
+          type: string
+          const: insufficient_capacity
+        capacity:
+          type: object
+          required: [required, available, missing]
+          description: The figures of the verdict, as decimal strings.
+          properties:
+            required:
+              type: string
+              description: The capacity the set requires.
+            available:
+              type: string
+              description: The capacity the issuer could cover at the time of submission.
+            missing:
+              type: string
+              description: The difference.
+
+    OperationStatePreEvaluationRejected:
+      type: object
+      required: [state, reason_code, message]
+      description: |
+        The whole request was rejected upstream before any member was
+        evaluated (e.g. idempotency conflict, operator-recognition failure,
+        unparseable submission set). Terminal.
+      properties:
+        state:
+          type: string
+          const: pre_evaluation_rejected
+        reason_code: { type: string }
+        message: { type: string }
+
+    OperationStateAcceptedForRetry:
+      type: object
+      required: [state, error]
+      description: |
+        The set is durably held in the node's outbox and will be submitted
+        again with the same `request_id`: the synchronous upstream call
+        failed, or the issuance service answered `insufficient_capacity`
+        while the set's commitments are still valid (then `capacity` is
+        present). Non-terminal: poll the operation, or check
+        `GET /v1/outbox/dead`.
+      properties:
+        state:
+          type: string
+          const: accepted_for_retry
+        error:
+          type: string
+          description: Why the set is waiting.
+        capacity:
+          type: object
+          required: [required, available, missing]
+          description: |
+            Present while the node waits for capacity: the figures of the
+            latest `insufficient_capacity` answer, as decimal strings.
+          properties:
+            required:
+              type: string
+              description: The capacity the set requires.
+            available:
+              type: string
+              description: The capacity the issuer could cover at the time of submission.
+            missing:
+              type: string
+              description: The difference.
+
+    OperationStateSubmissionFailed:
+      type: object
+      required: [state, error]
+      description: |
+        The submission did not get through and the node is not holding it
+        for retry. With `upstream_status`, the issuance service refused it
+        definitively: terminal, fix the cause before submitting again.
+        Without it, the node could not submit or record the outcome (see the
+        HTTP status: `503` is retryable with the same `request_id`).
+      properties:
+        state:
+          type: string
+          const: submission_failed
+        error: { type: string }
+        upstream_status:
+          type: integer
+          format: uint16
+          description: |
+            HTTP status of the issuance service's definitive refusal (in
+            practice a `4xx` other than `408`, `425` or `429`).
+
+    OperatorReceipt:
+      type: object
+      required:
+        - receipt_version
+        - operator_id
+        - submission_set_id
+        - system_id
+        - rules_version
+        - issued_at
+        - signature
+      description: |
+        Optional, detachable `operator.receipt/1` signed by the node's
+        operator key: this operator processed the submission set identified
+        by `submission_set_id`. One per submit, not per certificate. It does
+        not change any verifier verdict and is omitted when the node has no
+        operator identity. Its signing bytes are pinned by the conformance
+        suite (`operator-receipt`).
+      properties:
+        receipt_version:
+          type: string
+          examples: [operator.receipt/1]
+        operator_id: { type: string }
+        submission_set_id: { type: string }
+        system_id: { type: string }
+        rules_version: { type: string }
+        issued_at:
+          type: string
+          description: RFC 3339, second precision.
+        signature:
+          $ref: '#/components/schemas/DetachedSignature'
+
+    DetachedSignature:
+      description: "A signature carried apart from the bytes it signs, with its algorithm."
+      type: object
+      required: [signature_alg, signature_b64]
+      properties:
+        signature_alg:
+          type: string
+          examples: [ml-dsa-65-fips204-v1]
+        signature_b64: { type: string }
+
+    DeadLetterList:
+      description: "The outbox entries the node stopped retrying, as returned by `GET /v1/outbox/dead`."
+      type: object
+      required: [dead]
+      properties:
+        dead:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeadLetter'
+
+    DeadLetter:
+      type: object
+      required: [request_id, attempts, created_at_ms, last_error]
+      description: Delivery metadata only; the stored submission set is never returned.
+      properties:
+        request_id: { type: string }
+        attempts:
+          type: integer
+          format: uint32
+          minimum: 0
+        created_at_ms:
+          type: integer
+          format: int64
+          description: Unix epoch milliseconds when the node admitted the submission.
+        last_error:
+          type: [string, 'null']
+
+    RedriveAccepted:
+      description: "Acknowledgement that a dead outbox entry was queued for delivery again."
+      type: object
+      required: [request_id, state]
+      properties:
+        request_id: { type: string }
+        state:
+          type: string
+          const: pending

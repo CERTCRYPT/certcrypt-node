@@ -1,0 +1,95 @@
+# Secrets and key material
+# ·················
+# A node holds the operator's keys and its deployment configuration: whatever
+# holds them must never be committed. These patterns are deliberately broad — a
+# false positive costs one `git add -f`, a false negative is unrecoverable once
+# pushed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
+*.age
+*.sops.*
+id_rsa*
+id_ed25519*
+*.secrets.*
+*.local.*
+
+# Never commit non-public notes
+# ·················
+*.private.*
+*.internal.*
+*.notes.md
+NOTES*.md
+
+# Build output
+# ·················
+/target/
+**/*.rs.bk
+*.autogen.*
+
+# Profiling output
+# ·················
+*.profraw
+*.profdata
+flamegraph.svg
+perf.data
+perf.data.old
+
+# Node runtime state
+# ·················
+# SQLite stores (NODE_JOURNAL, NODE_OUTBOX), their WAL sidecars and the lock
+# file of the process that runs the background tasks.
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite.background.lock
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.db
+*.db-shm
+*.db-wal
+
+# Files the node and its examples write in the working directory: the
+# system-foundation/1 statement (CERTCRYPT_SYSTEM_FOUNDATION_PATH, or the
+# output of the gen_dev_foundation example), the operator domain binding
+# state (NODE_DOMAIN_BINDING_STATE) and the well-known file
+# (NODE_WELL_KNOWN_FILE). They describe a deployment, not this repository.
+/system-foundation.json
+*.system-foundation.json
+/node-domain-binding.json
+/node-domain-binding.json.lock
+/certcrypt-node.json
+
+# Logs
+# ·················
+*.log
+
+# Editors and OS
+# ·················
+.vscode/
+.idea/
+.history/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Scratch
+# ·················
+/tmp/
+/TMP/
+.tmp/
+*.tmp
+*.bak

@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+#
+# Pre-push checks.
+#
+# The gate runs before the objects leave the machine: a push that breaks the
+# build is easier to not make than to undo. This hook runs the repo's own
+# checks (scripts/ci.sh, the same script `make ci` / `npm run ci` runs) and
+# refuses the push when one fails.
+#
+# WHAT IT DOES NOT DO, deliberately: build a release, or anything slow enough
+# to be annoying. A hook that breaks the dev loop gets disabled within a week,
+# and a disabled hook checks nothing. Each repo's scripts/ci.sh says what it
+# runs and why.
+#
+# ON SUCCESS it leaves a mark: .git/ci-passed/<sha>, local, never pushed, so
+# later tooling can tell these checks already passed for that exact commit.
+# The mark is written only when what was checked IS that commit: the pushed
+# sha is HEAD and no tracked file differs from it.
+#
+# Install:  git config core.hooksPath .githooks   (once per clone)
+#
+# Exit non-zero anywhere and the push is refused.
+
+set -u
+
+# The refs being pushed. A push that only deletes has nothing to check.
+pushed_shas=""
+if [ ! -t 0 ]; then
+  all_deletes=1
+  saw_ref=0
+  while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    saw_ref=1
+    if [ "$local_sha" != "0000000000000000000000000000000000000000" ]; then
+      all_deletes=0
+      pushed_shas="$pushed_shas $local_sha"
+    fi
+  done
+  if [ "$saw_ref" = "1" ] && [ "$all_deletes" = "1" ]; then
+    echo "pre-push: branch deletion only, nothing to check."
+    exit 0
+  fi
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root" || exit 1
+repo_name="$(basename "$repo_root")"
+
+echo ""
+echo "── pre-push checks · ${repo_name} ──"
+
+if [ -f package.json ] && [ ! -d node_modules ]; then
+  echo "✗ node_modules is missing. Run: npm ci"
+  exit 1
+fi
+if [ -f Cargo.toml ] && ! command -v cargo >/dev/null 2>&1; then
+  echo "✗ cargo is not on PATH."
+  exit 1
+fi
+if [ ! -f scripts/ci.sh ]; then
+  echo "✗ scripts/ci.sh is missing: it is what this hook runs."
+  exit 1
+fi
+
+failed=0
+
+run_check() {
+  local label="$1"; shift
+  echo ""
+  echo "▸ ${label}"
+  if "$@"; then
+    echo "  ✓ ${label}"
+  else
+    echo "  ✗ ${label}"
+    failed=1
+  fi
+}
+
+# 1. The repo's checks, via the SAME script `make ci` runs. Kept in one place on
+#    purpose: two copies of "the checks" drift, and the day they disagree, one
+#    of them reports green on a push the other refuses.
+run_check "scripts/ci.sh" bash scripts/ci.sh
+
+# 2. No secrets in what is about to be pushed. A rendered .env or a .secrets.
+#    file is gitignored, but `git add -f` overrides that without a word.
+staged_secrets() {
+  local leaked
+  leaked="$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null; git ls-files)"
+  leaked="$(printf '%s\n' "$leaked" | sort -u | grep -E '(^|/)\.env(\.|$)|\.secrets\.' || true)"
+  # .env.example is the documented template and carries placeholders only.
+  leaked="$(printf '%s\n' "$leaked" | grep -v '^\.env\.example$' || true)"
+  if [ -n "$leaked" ]; then
+    echo "  Tracked files that look like secrets:"
+    printf '%s\n' "$leaked" | sed 's/^/    /'
+    return 1
+  fi
+  return 0
+}
+run_check "no tracked secrets" staged_secrets
+
+echo ""
+if [ "$failed" -ne 0 ]; then
+  echo "── push refused ──"
+  echo "Fix the above and push again."
+  echo ""
+  exit 1
+fi
+
+# 3. The ci mark (see the header).
+head_sha="$(git rev-parse HEAD)"
+if git diff --quiet HEAD -- 2>/dev/null; then
+  for sha in $pushed_shas; do
+    if [ "$sha" = "$head_sha" ]; then
+      mark_dir="$(git rev-parse --git-path ci-passed)"
+      mkdir -p "$mark_dir" && date -u +%Y-%m-%dT%H:%M:%SZ > "$mark_dir/$sha"
+      echo "ci mark: ${sha:0:7}"
+    fi
+  done
+fi
+
+# 4. An optional check this clone may configure (git config hooks.postPushCheck):
+# a command that receives the repo's directory name and reports what the push
+# leaves to do. Informational only: it never refuses the push.
+if [ -z "${POST_PUSH_CHECK_DONE:-}" ]; then
+  post_check="$(git config --get hooks.postPushCheck || true)"
+  if [ -n "$post_check" ]; then
+    $post_check "$(basename "$(git rev-parse --show-toplevel)")" || true
+  fi
+fi
+
+echo "── all checks passed ──"
+echo ""
+exit 0

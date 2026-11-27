@@ -1,0 +1,50 @@
+[package]
+name = "certcrypt-node"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "certcrypt-node"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+certcrypt-node-core = { path = "../core" }
+capacity-artifacts = { workspace = true }
+# Offline issuer-auth verification (system-domain Level-1 composite, ML-DSA
+# possession, manifest resolver) — the same protocol-core verifier the offline
+# path uses.
+capacity-verify = { workspace = true }
+# Used by main.rs to decode the operator key from env (operator receipt).
+base64 = { workspace = true }
+sha3 = { workspace = true }
+hex = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+rusqlite = { workspace = true }
+
+[dev-dependencies]
+# tests/openapi_examples.rs: read openapi/node.openapi.yaml and validate its
+# examples against their schemas.
+serde_yaml_ng = "0.10"
+jsonschema = { version = "0.61", default-features = false }
+capacity-verify = { workspace = true }
+# The public-API tests assert a chosen PRAGMA actually took effect, which means
+# reading it back from the file the way an embedder would.
+rusqlite = { workspace = true }

@@ -1,0 +1,64 @@
+# Copyright © 2025-2026 CERTCRYPT, Inc., its affiliates or licensors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[workspace]
+members = [
+    "crates/core",
+    "crates/node",
+    "crates/protocol-core/capacity-artifacts",
+    "crates/protocol-core/capacity-verify",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "1.0.0"
+authors = ["CERTCRYPT"]
+
+[workspace.dependencies]
+# The protocol core: the wire types, canonicalization, digests and Merkle rules
+# every CERTCRYPT implementation reproduces byte-for-byte. It lives in this repo
+# under `crates/protocol-core/` and is held to the published conformance vectors
+# (`certcrypt-conformance`), which is what makes a divergence fail loudly — a
+# one-byte difference in JCS or a Merkle rule flips a signature or a root, and
+# nothing else would catch it.
+capacity-artifacts = { path = "crates/protocol-core/capacity-artifacts" }
+capacity-verify = { path = "crates/protocol-core/capacity-verify" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_jcs = "0.2"
+sha3 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+thiserror = "1"
+ulid = { version = "1", features = ["serde"] }
+
+# crates/node (HTTP server + upstream client).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
+axum = { version = "0.7", features = ["macros", "json", "http1"] }
+# `limit` (ConcurrencyLimitLayer) and `timeout` (TimeoutLayer) are the node's
+# backpressure; `load-shed` is deliberately NOT enabled (see http.rs::router).
+tower = { version = "0.5", features = ["limit"] }
+# Request tracing (`trace`) and the per-request budget (`timeout`) for the
+# node's router.
+tower-http = { version = "0.6", features = ["trace", "timeout"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+anyhow = "1"
+# Embedded SQLite (bundled = no system libsqlite dependency; fits the
+# single-binary node). Default durable backend for the operation journal.
+rusqlite = { version = "0.32", features = ["bundled"] }

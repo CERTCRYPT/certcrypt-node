@@ -1,0 +1,33 @@
+[package]
+name = "capacity-verify"
+publish = false
+version = "1.0.0"
+edition = "2021"
+authors = ["CERTCRYPT"]
+
+[lib]
+path = "src/lib.rs"
+
+# See capacity-artifacts/Cargo.toml: versions are explicit so every build of this
+# crate, in whatever workspace, produces the same bytes.
+[dependencies]
+capacity-artifacts = { path = "../capacity-artifacts" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_jcs = "0.2"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+thiserror = "1"
+base64 = "0.22"
+sha3 = "0.10"
+hkdf = "0.12"
+hex = "0.4"
+ml-dsa = { version = "0.1", features = ["zeroize"] }
+signature = "3.0.0-rc.4"
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
+p256 = { version = "0.13", default-features = false, features = ["std", "ecdsa", "arithmetic", "pkcs8"] }
+# The ECDSA nonce is RFC 6979 with H = SHA3-256 (HMAC-SHA3-256). p256's
+# `sign_prehash` fixes the HMAC hash to SHA-256, so the signer derives k itself
+# with `rfc6979` and signs through `ecdsa`'s hazmat primitive. Same versions as
+# p256 0.13 already pulls in.
+ecdsa = { version = "0.16", default-features = false, features = ["arithmetic", "hazmat"] }
+rfc6979 = "0.4"

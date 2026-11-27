@@ -1,0 +1,62 @@
+# CI for certcrypt-node — the issuer-side node and its reusable crates.
+#
+# It runs scripts/ci.sh, the same script as `make ci` and the pre-push hook:
+# formatting, clippy with warnings denied, and the workspace tests. One script
+# for all three, so what CI reports is what a contributor already saw locally.
+#
+# THE CONFORMANCE CONTRACT IS REQUIRED. Several test suites check the node's
+# primitives and artifacts against the vectors in certcrypt-conformance, checked
+# out below as a sibling. The tests find it by walking up from the crate, and
+# FAIL when it is absent: a parity test that cannot see the contract verifies
+# nothing. CERTCRYPT_ALLOW_MISSING_CONFORMANCE is never set here.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Rust stable
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the node
+        uses: actions/checkout@v4
+        with:
+          path: certcrypt-node
+
+      - name: Check out the conformance contract
+        uses: actions/checkout@v4
+        with:
+          repository: CERTCRYPT/certcrypt-conformance
+          path: certcrypt-conformance
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            certcrypt-node/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('certcrypt-node/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Formatting, clippy and tests
+        working-directory: certcrypt-node
+        # `cargo fetch --locked` fails if Cargo.lock is out of date with the
+        # manifests: the committed lockfile is what is tested.
+        run: |
+          cargo fetch --locked
+          bash scripts/ci.sh

@@ -1,0 +1,365 @@
+{
+  "repository": "certcrypt-node",
+  "certification": "2026-11-26T1728Z",
+  "issued_under": "rules/2026-01",
+  "collection_profile": "subject.collection/1",
+  "leaf_profile": "subject.binary/1",
+  "files": [
+    {
+      "path": ".env.example",
+      "sha3_256": "996e2404d4ee71e88610019c756a1fcbf615f34c7ade670deeac27c0ff168860"
+    },
+    {
+      "path": ".githooks/pre-push",
+      "sha3_256": "3238460dd895ab42468646da9e58e09f41daf2300b6eb6f972880b978ac4c2c2"
+    },
+    {
+      "path": ".github/CODEOWNERS",
+      "sha3_256": "7d0ada84d0092ba2067988989cfd6cc43f1ab127b08671553575cd43cd98fa18"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha3_256": "df8f4cedce19b616839ccb0e83c62c8907d0619db1b22c86a2bf16aff44444f5"
+    },
+    {
+      "path": ".gitignore",
+      "sha3_256": "cc45e56f5275523371404ec9909a390a4719e337be1e549be5eb81a594396353"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha3_256": "e7d94673ba343816318a413d3ef299a665f55afd6e6863735da25dc9544cf993"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha3_256": "85d01bfd521ea1cf124488f2a4c49a122b20779fa4db656e44ad61ca64eeff34"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha3_256": "0aa7ede1383f5e54f8ca056624be08a3a42631c786d653585057f77b1f16d9e5"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha3_256": "b4a164e5748db21dc2a9e10309b6ff4683ed9ac14eb3e30dd0911179f9ba69eb"
+    },
+    {
+      "path": "LICENSE",
+      "sha3_256": "781bb118a03ab698f629da9d9d2cb11112fbb43d8a0af960ad9c4942088ccdc7"
+    },
+    {
+      "path": "Makefile",
+      "sha3_256": "41a5878557532176d19c47e45611053288c9a3761be217ae3efbe87a820d7fe2"
+    },
+    {
+      "path": "README.md",
+      "sha3_256": "679f58fd089b2b3463afca902387b701b75e6b4e4d77adde6f6984a576f9cc6e"
+    },
+    {
+      "path": "SECURITY.md",
+      "sha3_256": "935384dac6642c0dd9f99b4db09c8b447883ca388b9c9c01eb8ce32462c3e790"
+    },
+    {
+      "path": "crates/core/Cargo.toml",
+      "sha3_256": "4b88d5bc70354269506353dbc3ca08d34172aa02327e553d14c39210ed314bd5"
+    },
+    {
+      "path": "crates/core/src/lib.rs",
+      "sha3_256": "75c3ab4d81a6e2992dfdb9d318fe5f385da2bf4e52eb6aa68fe649628735f5b2"
+    },
+    {
+      "path": "crates/core/src/operator_receipt.rs",
+      "sha3_256": "de4e228db969567ddb8acdd1d60cba8cf16519761c2d0228e4c303fde6337a6d"
+    },
+    {
+      "path": "crates/core/src/settlement.rs",
+      "sha3_256": "43892f1d5481b0436a1de1f2be8cb97c84ba6baae6dce5c2935fabe6d0ffda38"
+    },
+    {
+      "path": "crates/core/src/submission_set_builder.rs",
+      "sha3_256": "15c5df02a9030f9ea3f7677e434e7d501322996d87829fd752a8341ec455ca5d"
+    },
+    {
+      "path": "crates/core/tests/conformance_parity.rs",
+      "sha3_256": "98df1ffd4fd73123ee4e5b5ddc0dd8cc496b1d07349e00dd0d4d890b82eeb9d3"
+    },
+    {
+      "path": "crates/core/tests/primitive_vectors_parity.rs",
+      "sha3_256": "b6c94969bc6c73e2d17dd771e138b0c491a23eae2bb7d7c34d620495cb302722"
+    },
+    {
+      "path": "crates/core/tests/verification_package_base_certificate.rs",
+      "sha3_256": "44ac3044ddc7990e99d97a001a1a6fd97b0358310b86be57279d73c09908f31e"
+    },
+    {
+      "path": "crates/core/tests/zero_data_capacity_e2e.rs",
+      "sha3_256": "35b85a8871e13a81ff7e6c30b5a23f10a6f3694a8cdccdb9d8ca6f797843651e"
+    },
+    {
+      "path": "crates/node/Cargo.toml",
+      "sha3_256": "9f710aee5b87547b17def7b272a8cb89566dc21861c2283bfb9bef08b631a048"
+    },
+    {
+      "path": "crates/node/examples/bench_store_concurrency.rs",
+      "sha3_256": "a956a7ea1f5256416457307379cdf1772e4360592d56e0db3639b61e6a600466"
+    },
+    {
+      "path": "crates/node/examples/gen_dev_foundation.rs",
+      "sha3_256": "75be135ca696e910ce2cd787cd2a71a85f4d6532de6e80fe8ddb4f2e277d9178"
+    },
+    {
+      "path": "crates/node/examples/gen_operator_key.rs",
+      "sha3_256": "c51dd2e90dd8de7d077bf2e7a43c9eaa0e0f6d5036a9b3331928e23f64a72c10"
+    },
+    {
+      "path": "crates/node/examples/gen_operator_recognition.rs",
+      "sha3_256": "5ab8c677fc037d10c40fe18888f2839ad71d12607c1341dc04ff66249c2d1281"
+    },
+    {
+      "path": "crates/node/examples/link_node.rs",
+      "sha3_256": "60d83a31a8cb82658f8bdd5def2179f574f5f07154bd1e92329793ac31e9a8d3"
+    },
+    {
+      "path": "crates/node/examples/support/dev_seed.rs",
+      "sha3_256": "a631cd9421fc8b6ce71b6c60f481a8d84781b2dfbb42edf7e8f9e4218013a793"
+    },
+    {
+      "path": "crates/node/src/auth.rs",
+      "sha3_256": "c88d969fda87cfe0181dbf8d29d305012dc9a5fdab34997a1bcdee6743666e76"
+    },
+    {
+      "path": "crates/node/src/background_lock.rs",
+      "sha3_256": "0203bbf51dd67fe30ec02d14a56405fdb262b5b98c5e07921e74cd0dc7eb3479"
+    },
+    {
+      "path": "crates/node/src/blocking.rs",
+      "sha3_256": "cd642f2fccba1ae1f699040a385724a3b14134efeb8ceaabadd520b1de82a88d"
+    },
+    {
+      "path": "crates/node/src/capacity_wait.rs",
+      "sha3_256": "26dee4ac78c58905bd1545afc2a973c9f9d2d9c1765c2ab1c355004fabd4d4a1"
+    },
+    {
+      "path": "crates/node/src/domain_binding.rs",
+      "sha3_256": "06f134b7fbdfeb28891f566723677951bbee37cb27855cfce50ee5fa977a3a1a"
+    },
+    {
+      "path": "crates/node/src/http.rs",
+      "sha3_256": "6a54d8a303a3349c59e7897cb28130ba62d23d84b8dd9e3190fc61bcc230cde5"
+    },
+    {
+      "path": "crates/node/src/journaling.rs",
+      "sha3_256": "8c4fbcb88056ae90351fda2585d6261cee5edb73fcc8231a3a52aee1e90153af"
+    },
+    {
+      "path": "crates/node/src/lib.rs",
+      "sha3_256": "a6bab0efc2be274927015dd3e4ed73a72821338bc0a1fc258e5d406215997cfb"
+    },
+    {
+      "path": "crates/node/src/main.rs",
+      "sha3_256": "d908266b8932266ad216108fa6a6cd08324c948691b87b7e1638b7cf300fd4b0"
+    },
+    {
+      "path": "crates/node/src/ops.rs",
+      "sha3_256": "e47371da07a76a40c41c1e13a785d276a2cb63930946721ba30d10235c168ac5"
+    },
+    {
+      "path": "crates/node/src/outbox.rs",
+      "sha3_256": "8a65c505d78ba1c24bc9fdf3b4e07840508e8ab2d431f9d1060d44f35c3fa3c1"
+    },
+    {
+      "path": "crates/node/src/relay.rs",
+      "sha3_256": "3f879211a80ebb58822c0ce84d06df72d3fd7bb5526177016b52330805c55054"
+    },
+    {
+      "path": "crates/node/src/retention.rs",
+      "sha3_256": "26635c640e8d0bcec394a7d33f6861cfc992c893fdee8648f938904dde1f9770"
+    },
+    {
+      "path": "crates/node/src/sqlite_journal.rs",
+      "sha3_256": "4e191600c49544fe4c42c8c7225c2c3b56759d0a67f95aa3fd37c2164b8135b5"
+    },
+    {
+      "path": "crates/node/src/store.rs",
+      "sha3_256": "761f00a89e083fb26852832f7145cd1d3bc431b5acfaaf4b04c91eb3307cdf56"
+    },
+    {
+      "path": "crates/node/src/upstream.rs",
+      "sha3_256": "6657a99f20c8b1832349b1d2f34661ad4a0e1bbca4c04da14529c2cac0eecb5b"
+    },
+    {
+      "path": "crates/node/tests/delivery_resilience.rs",
+      "sha3_256": "cc6312824202f5f4306228c85346ee15fbc712aee3370fb4f9a2e021d706c2ee"
+    },
+    {
+      "path": "crates/node/tests/domain_binding_conformance.rs",
+      "sha3_256": "488687b183da4496be6fabe79bc3c83bed6a7c2fe4e7d737003c857095a034ac"
+    },
+    {
+      "path": "crates/node/tests/issue_flow.rs",
+      "sha3_256": "4fb9244a0afc96a751778e932117b7602795891b1b54e6d16df3c031567eebbe"
+    },
+    {
+      "path": "crates/node/tests/load_resilience.rs",
+      "sha3_256": "634ede3eddf1aaa837bef40b2081b18b2651c9060d19c2904309afed582cec1c"
+    },
+    {
+      "path": "crates/node/tests/openapi_examples.rs",
+      "sha3_256": "eb907b6fa5d5036fe42d4a6a9807286018396baf072a12a6a9c17bcfcf970686"
+    },
+    {
+      "path": "crates/node/tests/openapi_routes.rs",
+      "sha3_256": "5f20470518e8073bfaa4e21b14ea9de5b02b8885d359a1284fe830aa87bee31b"
+    },
+    {
+      "path": "crates/node/tests/shared/mod.rs",
+      "sha3_256": "5ac52567cf77847c7210ff7df120ed0b8935901f04a616d52e057956ced4d1c2"
+    },
+    {
+      "path": "crates/node/tests/shared/submission_set_fixture.rs",
+      "sha3_256": "85dda51b63bd50dff6197c9c48d4dce3e0c84d55a7e07be7313c606aadc4b888"
+    },
+    {
+      "path": "crates/node/tests/startup_budget.rs",
+      "sha3_256": "e61376a48d1921a59d2397db23640ba5bdacde266f216661145c774b315be104"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/Cargo.toml",
+      "sha3_256": "9fd91f4d06cdc4fee6330f92001c7823e76c4034000ad9d5d46c2ace05f7fe5d"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/canonical.rs",
+      "sha3_256": "83a8363112845a6af00e569aa4290eb35ef5392d8707fd51489a20eed9566f51"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/capacity_commitment.rs",
+      "sha3_256": "b8ca3b7a3a95fb397c3e92643857dc8ba3e526b01ec47c03f07ec96c75c44529"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/capacity_evidence.rs",
+      "sha3_256": "97dd4246c36779f2594f4e695a33c25e0f7d7f15829073cd47415ecc2671d84c"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/capacity_holder_authorization.rs",
+      "sha3_256": "c3698a2a4f8f8c92f9fde9bc0b240b654269a9a063e869e500ae7140129bc453"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/composite_sig.rs",
+      "sha3_256": "b6cadb902e067a60ccf0b864ce5a887879299044d6b5a971f81dcb797eb6e8b4"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/errors.rs",
+      "sha3_256": "6706ad52b1b9bdea8ef69712bcc473b8995af63f3dbf4ad8aff88b2a16e4f8c0"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/lib.rs",
+      "sha3_256": "6694b5a961dd58acd0852cbc5bda12749de84a36f48a34f9469189d29cdc9a5f"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/merkle.rs",
+      "sha3_256": "d7169eee901a1546fd163fed0131f59cbd323b1fc2dbaa37f58e0a48e0d9ce5d"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/operator_domain_binding.rs",
+      "sha3_256": "5a701b67e9dd5966df105f1c28eb37c44fd60f3d400d8b95b68fd266e8f7ab04"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/operator_recognition.rs",
+      "sha3_256": "513e189e8215b70cfc3e11ebca2f697a4553af9dd51ec278fd547d7308dd5854"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/pseudonym.rs",
+      "sha3_256": "19ca485bae062c7ddefcfbd9ed8ba94477e1b2af1a8c6736282148b5a996cb3f"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/settlement.rs",
+      "sha3_256": "4a3ea3de37e0bf8b5942bd3c7813cdeae42c9d0c13cb8a7f77ce6202fb781c54"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/submission_set.rs",
+      "sha3_256": "81f0cfd3a9559f63b15cf52586e988f0b56161c757a9126f134d9cbec816f430"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/src/verification_package.rs",
+      "sha3_256": "483349a844eb32051c51dbad086fe4857027182186ce64494805e4e80a41d665"
+    },
+    {
+      "path": "crates/protocol-core/capacity-artifacts/tests/operator_domain_binding_conformance.rs",
+      "sha3_256": "74c27bdd52e63733b732089ffbd465e617f3a57885ec9bfa90910aaf9d5f16de"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/Cargo.toml",
+      "sha3_256": "3d8f2a6fbb64c67c14b51025919683190d2b14cd2a88a6cbed8f5ac28fc8d9c2"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/src/capacity_evidence.rs",
+      "sha3_256": "067d6fa796fa3a7792c3245bb1885e799582738960e35a3a88467f9350c7d7f2"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/src/composite.rs",
+      "sha3_256": "7cbe81045c869e05f73c92082f5510020f008d5594dd499e8704ea4ac530ffcd"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/src/ecdsa_p256.rs",
+      "sha3_256": "18372fd9fd4bd5e5a5163f35db3e251e15a8aed736fc8e6964cdcd1429b84d6c"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/src/errors.rs",
+      "sha3_256": "e8a10888c1a3501482580226b2368608508eb890d5898c1917a6b0c26f63021a"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/src/foundation.rs",
+      "sha3_256": "6a2bd664bf1bafcabef298186a1f82ff00a377a83361ba1c43780023c86b976d"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/src/holder_keyset.rs",
+      "sha3_256": "6f70fd74799386b1c016fc94df006ea6ef4b7a0d2dcb9bc1c143535ec434055c"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/src/lib.rs",
+      "sha3_256": "63e73e2623d0a345560c65fcd02b65dafced9f7f6deb4e1cc807ebda8e1c34e9"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/src/manifest.rs",
+      "sha3_256": "27856d7f85a6101597cee315df4c425afb39ad2fb78cd71e82359e0ac4a44ac8"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/src/mldsa.rs",
+      "sha3_256": "d98f2f76d4c22de201b8943a7c51572c960110a7cee1b87b33454ec80acfc1c0"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/tests/composite_conformance_parity.rs",
+      "sha3_256": "041d7a018523d525684e7e09a589282232424ba64f6f885413ff1aa6dfd55fb0"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/tests/ecdsa_p256_deterministic_parity.rs",
+      "sha3_256": "3fa23aded8ca9d1656365f5d907d26c0904607064c0ceb2b9cf35c7892f13834"
+    },
+    {
+      "path": "crates/protocol-core/capacity-verify/tests/foundation_conformance.rs",
+      "sha3_256": "47589d44c7d815476e30ed580aba4fe227627d025dfd205df0ae386aed9dd2e9"
+    },
+    {
+      "path": "openapi/node.openapi.yaml",
+      "sha3_256": "8a508ba7c2566e04df97351e0bf6c10871e866dd070d15bdcd9a0b85ee0d02f5"
+    },
+    {
+      "path": "scripts/ci.sh",
+      "sha3_256": "865dcb11313c5473302d905fbb0ebf178fdb28d1c00a02810552613287fb354e"
+    },
+    {
+      "path": "scripts/install_node.sh",
+      "sha3_256": "18e5f99717333a4d9fb89483a739ee03e8cc6a40de02d9c279ab4098c31046ec"
+    },
+    {
+      "path": "scripts/link_node.sh",
+      "sha3_256": "e17ade3a42df39fe873f49a2cec6d4d7c49bfca69f1bb96c9ddd12264409b5b4"
+    },
+    {
+      "path": "scripts/run_node.sh",
+      "sha3_256": "72adda6f29c8f80e4c58f6d5eff17249f654f581afad7e9119d5068c70ee95d1"
+    }
+  ],
+  "declared_cardinality": 88,
+  "collection_root": "116595fdc8c6b173c746a6be498e0e2746fe0e83013f283342f29405080dd7f8",
+  "subtree_root": "c8d181d6a8287e8d3955488996b4978c63100363852990e3153c4fdc72fdffa6",
+  "procedure": "verification/README.md"
+}
